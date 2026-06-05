@@ -7,11 +7,19 @@
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Direction control system for an aircraft axis. Manages a current value and a
  * target value, and adjusts the current value over time toward the target
  * using a physics-based movement (inertia, dampening, tolerance, max step).
+ * 
+ * Thread Safety and Observer Pattern:
+ * - DirectionControl uses CopyOnWriteArrayList for thread-safe listener registration
+ * - Listeners are notified on the simulation thread when values change
+ * - Multiple threads can safely add/remove listeners while notifications are firing
+ * - GUI thread reads the latest value from a volatile field set by the listener
+ * - This decouples polling from the Swing EDT, eliminating frame-lag perception
  */
 public class DirectionControl {
     private String name;
@@ -24,6 +32,9 @@ public class DirectionControl {
     private double dampening;
     private double tolerance;
     private double maxStep;
+
+    // Observer pattern: listeners are notified when value changes
+    private final CopyOnWriteArrayList<DirectionControlListener> listeners = new CopyOnWriteArrayList<>();
 
     // Statistics tracking
     private double totalDeviation = 0;
@@ -43,6 +54,25 @@ public class DirectionControl {
     protected void setDampening(double dampening) { this.dampening = dampening; }
     protected void setTolerance(double tolerance) { this.tolerance = tolerance; }
 
+    /**
+     * Adds a listener to be notified when this control's value changes.
+     * Safe to call from any thread.
+     */
+    public void addListener(DirectionControlListener listener) {
+        if (listener != null) {
+            listeners.add(listener);
+        }
+    }
+
+    /**
+     * Removes a listener. Safe to call from any thread.
+     */
+    public void removeListener(DirectionControlListener listener) {
+        if (listener != null) {
+            listeners.remove(listener);
+        }
+    }
+
     public DirectionControl(String name, double min, double max, ConfigLoader config) {
         this.name = name;
         this.min = min;
@@ -61,8 +91,10 @@ public class DirectionControl {
 
     /**
      * Update the current value based on the physics model and target.
+     * Notifies listeners if the value changes.
      */
     public synchronized void update() {
+        double previousValue = currentValue;
         double deviation = targetValue - currentValue;
 
         if (trackStatistics) {
@@ -93,6 +125,21 @@ public class DirectionControl {
         } else if (currentValue > max) {
             currentValue = max;
             velocity = 0;
+        }
+
+        // Notify listeners if value changed
+        if (currentValue != previousValue) {
+            notifyListeners();
+        }
+    }
+
+    /**
+     * Notifies all registered listeners of a value change.
+     * Called on the simulation thread. Must not call Swing methods directly.
+     */
+    private void notifyListeners() {
+        for (DirectionControlListener listener : listeners) {
+            listener.onDirectionChanged(this);
         }
     }
 

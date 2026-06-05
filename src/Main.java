@@ -38,11 +38,16 @@ public class Main {
     private static Map<String, String> parseArgs(String[] args) {
         Map<String, String> argMap = new HashMap<>();
         for (int i = 0; i < args.length; i++) {
-            if (args[i].startsWith("--") && i + 1 < args.length) {
+            if (args[i].startsWith("--")) {
                 String key = args[i].substring(2);
-                String value = args[i + 1];
-                argMap.put(key, value);
-                i++;  // Skip the value in next iteration
+                if (i + 1 < args.length && !args[i + 1].startsWith("--")) {
+                    String value = args[i + 1];
+                    argMap.put(key, value);
+                    i++;  // Skip the value in next iteration
+                } else {
+                    // Flag with no value (like --inject-failures)
+                    argMap.put(key, "true");
+                }
             }
         }
         return argMap;
@@ -93,6 +98,28 @@ public class Main {
         PlatformSupport.applySystemLookAndFeel();
         System.out.println("Detected OS: " + PlatformSupport.osLabel()
                 + " (ANSI on stdout: " + PlatformSupport.supportsAnsi() + ")");
+
+        // Load the maneuver script (Task 1)
+        ManeuverScript maneuverScript = null;
+        String scriptPath = params.getOrDefault("script", "default_maneuvers.csv");
+        
+        try {
+            maneuverScript = ManeuverScript.load(scriptPath);
+            System.out.println("Loaded maneuver script: " + scriptPath + 
+                " (" + maneuverScript.size() + " maneuvers)");
+        } catch (IllegalArgumentException iae) {
+            System.err.println(iae.getMessage());
+            System.exit(1);
+        } catch (java.io.IOException ioe) {
+            System.err.println("Script error: could not read file " + scriptPath);
+            System.exit(1);
+        }
+
+        // Check for --inject-failures flag (Task 3)
+        boolean injectFailures = params.containsKey("inject-failures");
+        if (injectFailures) {
+            System.out.println("Running with --inject-failures: will throw exceptions at 3s, 6s, and 9s");
+        }
 
         // Set up configuration
         String configDir = System.getProperty("user.home") + File.separator + ".aircraft_sim";
@@ -149,12 +176,39 @@ public class Main {
 
         // Create and start threads
         Thread userInputThread = createInputThread(rollControl, pitchControl, yawControl, turbulenceEnabled, running);
-        Thread turbulenceThread = createTurbulenceThread(rollControl, pitchControl, yawControl, turbulenceEnabled, running);
-        Thread automatedDemoThread = createAutomatedDemoThread(rollControl, pitchControl, yawControl);
+        Thread turbulenceThread = createTurbulenceThread(rollControl, pitchControl, yawControl, turbulenceEnabled, running, injectFailures);
+        Thread automatedDemoThread = createAutomatedDemoThread(rollControl, pitchControl, yawControl, maneuverScript);
+
+        // Wrap long-lived worker threads with SupervisedRunner (Task 3)
+        Thread supervisedTurbulenceThread = new Thread(
+            new SupervisedRunner("turbulence", 
+                () -> {
+                    try {
+                        turbulenceThread.run();
+                    } catch (Exception e) {
+                        throw e;
+                    }
+                }, 
+                running::get),
+            "SupervisedTurbulence"
+        );
+
+        Thread supervisedDemoThread = new Thread(
+            new SupervisedRunner("automated-demo",
+                () -> {
+                    try {
+                        automatedDemoThread.run();
+                    } catch (Exception e) {
+                        throw e;
+                    }
+                },
+                running::get),
+            "SupervisedDemo"
+        );
 
         userInputThread.start();
-        turbulenceThread.start();
-        automatedDemoThread.start();
+        supervisedTurbulenceThread.start();
+        supervisedDemoThread.start();
 
         // Create and start the Swing GUI. The GUI reads orientation directly
         // from the DirectionControl instances passed in - no JSON intermediary.
@@ -165,7 +219,14 @@ public class Main {
         // tells the GUI to throttle its frame rate when the host is under load.
         ResourceMonitor resourceMonitor = new ResourceMonitor(1000, gui::setPerformanceLevel);
         gui.setResourceMonitor(resourceMonitor);
-        Thread resourceMonitorThread = resourceMonitor.start();
+        
+        Thread resourceMonitorThread = new Thread(
+            new SupervisedRunner("resource-monitor",
+                () -> resourceMonitor.run(),
+                running::get),
+            "SupervisedResourceMonitor"
+        );
+        resourceMonitorThread.start();
 
         gui.show();
         
@@ -295,12 +356,14 @@ public class Main {
     }
     
     /**
-     * Creates a thread that applies turbulence to the aircraft
+     * Creates a thread that applies turbulence to the aircraft.
+     * If injectFailures is true, throws exceptions at 3, 6, and 9 seconds for testing.
      */
     private static Thread createTurbulenceThread(DirectionControl roll, DirectionControl pitch, DirectionControl yaw,
-                                         AtomicBoolean turbulenceEnabled, AtomicBoolean running) {
+                                         AtomicBoolean turbulenceEnabled, AtomicBoolean running, boolean injectFailures) {
         return new Thread(() -> {
             Random random = new Random();
+            long startTime = System.currentTimeMillis();
 
             while (running.get()) {
                 try {
@@ -317,6 +380,14 @@ public class Main {
                         yaw.setCurrentValue(yaw.getCurrentValue() + yawJitter);
                     }
 
+                    // Task 3: Inject failures at 3, 6, and 9 seconds for testing recovery
+                    if (injectFailures) {
+                        long elapsedSeconds = (System.currentTimeMillis() - startTime) / 1000;
+                        if (elapsedSeconds == 3 || elapsedSeconds == 6 || elapsedSeconds == 9) {
+                            throw new RuntimeException("Injected failure at " + elapsedSeconds + " seconds");
+                        }
+                    }
+
                     Thread.sleep(200);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -328,82 +399,36 @@ public class Main {
 
     /**
      * Creates a thread that automatically demonstrates various flight maneuvers
-     * without requiring user input - using ultra-gentle transitions
+     * loaded from a ManeuverScript file (Task 1)
      */
-    private static Thread createAutomatedDemoThread(DirectionControl roll, DirectionControl pitch, DirectionControl yaw) {
+    private static Thread createAutomatedDemoThread(DirectionControl roll, DirectionControl pitch, DirectionControl yaw,
+                                                     ManeuverScript script) {
         return new Thread(() -> {
             try {
                 // Allow time for the simulation to start
-                Thread.sleep(3000); // Longer initial delay
-                System.out.println("\nStarting automated flight demonstration with ultra-gentle maneuvers...");
+                Thread.sleep(3000);
+                System.out.println("\nStarting automated flight demonstration from script...");
                 
-                // Start with extended stable level flight
-                roll.setTargetValue(0);
-                pitch.setTargetValue(0);
-                yaw.setTargetValue(0);
-                Thread.sleep(8000);  // 8 seconds of stable flight
-                
+                java.util.List<ManeuverScript.Maneuver> maneuvers = script.getManeuvers();
+                int maneuverIndex = 0;
+
                 while (true) {
-                    // Stage 1: Level flight
-                    System.out.println("\nDemonstrating: Level flight");
-                    roll.setTargetValue(0);
-                    pitch.setTargetValue(0);
-                    yaw.setTargetValue(0);
-                    Thread.sleep(8000); // Long stable period
+                    ManeuverScript.Maneuver current = maneuvers.get(maneuverIndex % maneuvers.size());
                     
-                    // Stage 2: Ultra-gentle right turn (minimal values)
-                    System.out.println("\nDemonstrating: Ultra-gentle right turn");
-                    roll.setTargetValue(2);  // Extremely gentle bank angle (was 5)
-                    pitch.setTargetValue(0); // No pitch
-                    yaw.setTargetValue(2);   // Minimal yaw (was 5)
-                    Thread.sleep(12000);     // Extended hold for observation
+                    // Set targets
+                    roll.setTargetValue(current.rollTarget);
+                    pitch.setTargetValue(current.pitchTarget);
+                    yaw.setTargetValue(current.yawTarget);
                     
-                    // Back to level
-                    roll.setTargetValue(0);
-                    pitch.setTargetValue(0);
-                    yaw.setTargetValue(0);
-                    Thread.sleep(8000);
+                    System.out.println("\nManeuver " + (maneuverIndex + 1) + ": " +
+                        "roll=" + String.format("%.1f", current.rollTarget) + "°, " +
+                        "pitch=" + String.format("%.1f", current.pitchTarget) + "°, " +
+                        "yaw=" + String.format("%.1f", current.yawTarget) + "°, " +
+                        "duration=" + (current.durationMs / 1000) + "s");
                     
-                    // Stage 3: Ultra-gentle left turn
-                    System.out.println("\nDemonstrating: Ultra-gentle left turn");
-                    roll.setTargetValue(-2); // Extremely gentle bank angle (was -5)
-                    pitch.setTargetValue(0); // No pitch
-                    yaw.setTargetValue(-2);  // Minimal yaw (was -5)
-                    Thread.sleep(12000);     // Extended hold for observation
-                    
-                    // Back to level
-                    roll.setTargetValue(0);
-                    pitch.setTargetValue(0);
-                    yaw.setTargetValue(0);
-                    Thread.sleep(8000);
-                    
-                    // Stage 4: Very gentle climb
-                    System.out.println("\nDemonstrating: Very gentle climb");
-                    roll.setTargetValue(0);
-                    pitch.setTargetValue(-5); // Minimal pitch up
-                    yaw.setTargetValue(0);
-                    Thread.sleep(10000);      // Hold for observation
-                    
-                    // Back to level
-                    roll.setTargetValue(0);
-                    pitch.setTargetValue(0);
-                    yaw.setTargetValue(0);
-                    Thread.sleep(8000);
-                    
-                    // Stage 5: Very gentle descent
-                    System.out.println("\nDemonstrating: Very gentle descent");
-                    roll.setTargetValue(0);
-                    pitch.setTargetValue(3);  // Minimal pitch down
-                    yaw.setTargetValue(0);
-                    Thread.sleep(10000);      // Hold for observation
-                    
-                    // Return to level for a long time
-                    System.out.println("\nReturning to level flight");
-                    roll.setTargetValue(0);
-                    pitch.setTargetValue(0);
-                    yaw.setTargetValue(0);
-                    Thread.sleep(10000);      // Long stable period
-                } 
+                    Thread.sleep(current.durationMs);
+                    maneuverIndex++;
+                }
             } catch (InterruptedException e) {
                 System.out.println("Demo thread interrupted.");
             }

@@ -1,0 +1,20 @@
+seconds,roll,pitch,yaw
+# This is a valid comment
+5,0,0,0
+
+# Error: Line 5 has only 3 fields (missing yaw)
+8,0,0
+
+# Error: Line 8 has a non-numeric value for roll
+10,abc,0,0
+
+# Error: Line 11 has roll out of range (> 180)
+5,200,0,0
+
+# Error: Line 14 has pitch out of range (> 90)
+5,0,150,0
+
+# Error: Line 17 has yaw out of range (> 180)  
+5,0,0,190
+
+10,0,0,0

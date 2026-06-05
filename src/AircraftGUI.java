@@ -139,6 +139,11 @@ public class AircraftGUI {
     // Fonts for text displays
     private Font mediumFont = new Font("Arial", Font.BOLD, 16);
 
+    // Task 2: Volatile fields for safe publishing from listener thread to EDT
+    private volatile double latestRoll = 0.0;
+    private volatile double latestPitch = 0.0;
+    private volatile double latestYaw = 0.0;
+
     /**
      * Creates the GUI bound to the simulation's three orientation controls.
      * Roll/pitch/yaw shown on screen are read from these instances each frame.
@@ -149,6 +154,17 @@ public class AircraftGUI {
         this.rollControl = rollControl;
         this.pitchControl = pitchControl;
         this.yawControl = yawControl;
+
+        // Task 2: Register listeners for observer pattern
+        // Listeners publish latest values to volatile fields, eliminating polling lag
+        rollControl.addListener(control -> latestRoll = control.getCurrentValue());
+        pitchControl.addListener(control -> latestPitch = control.getCurrentValue());
+        yawControl.addListener(control -> latestYaw = control.getCurrentValue());
+
+        // Initialize volatile fields with current values
+        latestRoll = rollControl.getCurrentValue();
+        latestPitch = pitchControl.getCurrentValue();
+        latestYaw = yawControl.getCurrentValue();
     }
 
     public void setResourceMonitor(ResourceMonitor monitor) {
@@ -364,15 +380,19 @@ public class AircraftGUI {
     /**
      * Pulls roll/pitch/yaw from the simulation's DirectionControl instances and
      * updates GUI-specific dynamics (altitude tracking and airspeed variation).
+     * 
+     * Task 2: Now reads from volatile fields set by DirectionControl listeners
+     * instead of polling getCurrentValue(). This eliminates frame lag.
      */
     private void updateAircraft() {
         long currentTime = System.currentTimeMillis();
         double timeSeconds = (currentTime - simulationStartTime) / 1000.0;
 
-        // Read orientation from the simulation's control instances.
-        roll = rollControl.getCurrentValue();
-        pitch = pitchControl.getCurrentValue();
-        yaw = yawControl.getCurrentValue();
+        // Task 2: Read orientation from volatile fields set by listeners
+        // instead of polling. This is more efficient and eliminates polling lag.
+        roll = latestRoll;
+        pitch = latestPitch;
+        yaw = latestYaw;
 
         // Altitude tracking: move toward targetAltitude at up to 500 ft/min.
         double altitudeDifference = targetAltitude - currentAltitude;
