@@ -111,3 +111,48 @@ Copilot suggested wrapping the thread runnable in SupervisedRunner and using an 
 
 ---
 
+## Session 6 – 2026-06-06 15:30
+
+**Task:** Review and verification of completed implementation  
+**Tool:** GitHub Copilot Chat  
+**Prompt (verbatim):**  
+> Review the current project implementation and identify any remaining tasks or verification steps for Task 1, Task 2, and Task 3. Summarize what is complete and what still needs to be validated before submission.
+
+**Suggestion summary:**  
+Copilot confirmed that the main features are implemented and documented:  
+- `Task 1` is implemented in `ManeuverScript.java` and used by `Main.java` with `--script` loading and validation.  
+- `Task 2` is implemented using `DirectionControlListener` and volatile fields in `AircraftGUI` to avoid polling.  
+- `Task 3` is implemented in `SupervisedRunner.java` and worker threads are wrapped in `Main.java` for restart/backoff behavior.  
+
+It also flagged verification work that should still be performed:  
+- runtime testing of `--inject-failures` to ensure injected turbulence failures restart correctly,  
+- validation that `DirectionControl` listener notifications occur only on real value changes,  
+- end-to-end compilation and run validation with `default_maneuvers.csv` and `error_maneuvers.csv`,  
+- packaging the submission according to README instructions.
+
+**Decision:** Accepted as a review checkpoint  
+**Why:** This session records the final review state and the remaining validation steps needed before final submission.
+
+---
+
+## Session 7 – 2026-06-06 16:00
+
+**Task:** Complete the final review, fix the remaining runtime issue, and verify the self-healing recovery path.  
+**Tool:** GitHub Copilot Chat  
+**Prompt (verbatim):**  
+> Fix the turbulence thread self-healing bug, compile the project, and run the application with `--inject-failures` to verify that failures occur at 3, 6, and 9 seconds and that each restart is handled correctly.
+
+**Suggestion summary:**  
+Copilot identified the remaining defect as the turbulence worker being wrapped around a `Thread` object rather than a reusable `Runnable`. The fix was to:
+- convert `createTurbulenceThread()` into `createTurbulenceTask()` so injected-failure state is preserved across restart attempts,  
+- convert `createAutomatedDemoThread()` into `createAutomatedDemoTask()` for consistent supervision,  
+- pass shared `Runnable` tasks directly into `SupervisedRunner` in `Main.java`,  
+- clean up shutdown logic to interrupt the supervised threads rather than unused worker thread objects.
+
+**Verification:**  
+- Project compiled successfully after the fix.  
+- Running `java Main --script ..\default_maneuvers.csv --inject-failures` confirmed the turbulence worker failed and restarted at the expected times: 3s, 6s, and 9s.  
+- The supervisor applied exponential backoff correctly: 100ms, 200ms, 400ms.
+
+**Decision:** Accepted as complete  
+**Why:** All core tasks are implemented and the self-healing runtime behavior was validated in an actual application run.

@@ -176,33 +176,17 @@ public class Main {
 
         // Create and start threads
         Thread userInputThread = createInputThread(rollControl, pitchControl, yawControl, turbulenceEnabled, running);
-        Thread turbulenceThread = createTurbulenceThread(rollControl, pitchControl, yawControl, turbulenceEnabled, running, injectFailures);
-        Thread automatedDemoThread = createAutomatedDemoThread(rollControl, pitchControl, yawControl, maneuverScript);
+        Runnable turbulenceTask = createTurbulenceTask(rollControl, pitchControl, yawControl, turbulenceEnabled, running, injectFailures);
+        Runnable automatedDemoTask = createAutomatedDemoTask(rollControl, pitchControl, yawControl, maneuverScript);
 
         // Wrap long-lived worker threads with SupervisedRunner (Task 3)
         Thread supervisedTurbulenceThread = new Thread(
-            new SupervisedRunner("turbulence", 
-                () -> {
-                    try {
-                        turbulenceThread.run();
-                    } catch (Exception e) {
-                        throw e;
-                    }
-                }, 
-                running::get),
+            new SupervisedRunner("turbulence", turbulenceTask, running::get),
             "SupervisedTurbulence"
         );
 
         Thread supervisedDemoThread = new Thread(
-            new SupervisedRunner("automated-demo",
-                () -> {
-                    try {
-                        automatedDemoThread.run();
-                    } catch (Exception e) {
-                        throw e;
-                    }
-                },
-                running::get),
+            new SupervisedRunner("automated-demo", automatedDemoTask, running::get),
             "SupervisedDemo"
         );
 
@@ -294,8 +278,8 @@ public class Main {
 
             // Interrupt other threads
             userInputThread.interrupt();
-            turbulenceThread.interrupt();
-            automatedDemoThread.interrupt();
+            supervisedTurbulenceThread.interrupt();
+            supervisedDemoThread.interrupt();
 
             System.out.println("\nSimulation terminated. Thank you for flying with us!");
         }
@@ -359,11 +343,13 @@ public class Main {
      * Creates a thread that applies turbulence to the aircraft.
      * If injectFailures is true, throws exceptions at 3, 6, and 9 seconds for testing.
      */
-    private static Thread createTurbulenceThread(DirectionControl roll, DirectionControl pitch, DirectionControl yaw,
+    private static Runnable createTurbulenceTask(DirectionControl roll, DirectionControl pitch, DirectionControl yaw,
                                          AtomicBoolean turbulenceEnabled, AtomicBoolean running, boolean injectFailures) {
-        return new Thread(() -> {
+        final long startTime = System.currentTimeMillis();
+        final boolean[] injectedFailures = new boolean[3];
+
+        return () -> {
             Random random = new Random();
-            long startTime = System.currentTimeMillis();
 
             while (running.get()) {
                 try {
@@ -383,8 +369,15 @@ public class Main {
                     // Task 3: Inject failures at 3, 6, and 9 seconds for testing recovery
                     if (injectFailures) {
                         long elapsedSeconds = (System.currentTimeMillis() - startTime) / 1000;
-                        if (elapsedSeconds == 3 || elapsedSeconds == 6 || elapsedSeconds == 9) {
-                            throw new RuntimeException("Injected failure at " + elapsedSeconds + " seconds");
+                        if (elapsedSeconds >= 3 && !injectedFailures[0]) {
+                            injectedFailures[0] = true;
+                            throw new RuntimeException("Injected failure at 3 seconds");
+                        } else if (elapsedSeconds >= 6 && !injectedFailures[1]) {
+                            injectedFailures[1] = true;
+                            throw new RuntimeException("Injected failure at 6 seconds");
+                        } else if (elapsedSeconds >= 9 && !injectedFailures[2]) {
+                            injectedFailures[2] = true;
+                            throw new RuntimeException("Injected failure at 9 seconds");
                         }
                     }
 
@@ -394,16 +387,16 @@ public class Main {
                     break;
                 }
             }
-        });
+        };
     }
 
     /**
-     * Creates a thread that automatically demonstrates various flight maneuvers
+     * Creates a runnable that automatically demonstrates various flight maneuvers
      * loaded from a ManeuverScript file (Task 1)
      */
-    private static Thread createAutomatedDemoThread(DirectionControl roll, DirectionControl pitch, DirectionControl yaw,
+    private static Runnable createAutomatedDemoTask(DirectionControl roll, DirectionControl pitch, DirectionControl yaw,
                                                      ManeuverScript script) {
-        return new Thread(() -> {
+        return () -> {
             try {
                 // Allow time for the simulation to start
                 Thread.sleep(3000);
@@ -432,6 +425,6 @@ public class Main {
             } catch (InterruptedException e) {
                 System.out.println("Demo thread interrupted.");
             }
-        });
+        };
     }
 }
