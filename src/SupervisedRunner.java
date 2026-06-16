@@ -24,6 +24,9 @@ public class SupervisedRunner implements Runnable {
     private final Runnable work;
     private final BooleanSupplier isSimulationRunning;
     
+    // Worker abandonment flag
+    private volatile boolean abandoned = false;
+    
     // Backoff state
     private long backoffMs = 100;  // Start at 100ms
     private final long MAX_BACKOFF_MS = 5000;  // Cap at 5 seconds
@@ -46,7 +49,7 @@ public class SupervisedRunner implements Runnable {
 
     @Override
     public void run() {
-        while (isSimulationRunning.getAsBoolean()) {
+        while (isSimulationRunning.getAsBoolean() && !abandoned) {
             try {
                 // Run the worker
                 lastSuccessTime = System.currentTimeMillis();
@@ -73,6 +76,7 @@ public class SupervisedRunner implements Runnable {
             System.err.println("worker \"" + workerName + "\" exceeded restart budget; will not be restarted");
             System.err.println("Final exception: " + exception.getMessage());
             exception.printStackTrace();
+            abandoned = true;
             return;
         }
         

@@ -156,3 +156,21 @@ Copilot identified the remaining defect as the turbulence worker being wrapped a
 
 **Decision:** Accepted as complete  
 **Why:** All core tasks are implemented and the self-healing runtime behavior was validated in an actual application run.
+
+---
+
+## Session 8 – 2026-06-15 17:30
+
+**Task:** Fix infinite loop bug in SupervisedRunner  
+**Tool:** GitHub Copilot Chat  
+**Prompt (verbatim):**  
+> SupervisedRunner spins forever printing "exceeded restart budget" when the budget runs out instead of stopping. Fix with a volatile boolean abandoned flag set in handleWorkerFailure and checked in the while condition.
+
+**Suggestion summary:**  
+Copilot identified the root cause: when the restart budget is exhausted, `handleWorkerFailure()` logs the "exceeded restart budget" message and returns, but the main loop continues because there's no mechanism to exit. The fix involves:
+- Adding a `volatile boolean abandoned = false;` field to track when the worker is permanently abandoned
+- Modifying the while condition from `while (isSimulationRunning.getAsBoolean())` to `while (isSimulationRunning.getAsBoolean() && !abandoned)`
+- Setting `abandoned = true` in `handleWorkerFailure()` when `canRestart()` returns false
+
+**Decision:** Accepted as written  
+**Why:** This is a critical bug fix that prevents the worker thread from spinning indefinitely on budget exhaustion. The volatile flag ensures thread-safe visibility across the supervisor and worker threads, and the flag check in the while condition provides a clean exit path.
